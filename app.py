@@ -7,43 +7,65 @@ app = Flask(__name__)
 TOKEN = "8488650962:AAHbiv5ErWNooKDD36wAeGm0gDpRbbUHirQ"
 bot = telebot.TeleBot(TOKEN)
 
-def process_file_logic(data, new_uid_int):
-    # تحويل الآيدي الجديد إلى Bytes
-    new_uid_bytes = new_uid_int.to_bytes(4, byteorder='little')
-    
-    # محاولة إيجاد الآيدي القديم:
-    # معظم ملفات .bytes تضع الآيدي بعد علامة معينة أو في مكان يتراوح بين 48 و 60
-    # سنقوم هنا بفحص الإزاحة الأكثر شيوعاً 0x38 (56)
-    offset = 56 
-    old_uid_int = int.from_bytes(data[offset:offset+4], byteorder='little')
-    
-    # إذا كان الرقم الذي قرأناه يبدو غير منطقي، سنبحث في أماكن قريبة
-    if old_uid_int == 1816593930 or old_uid_int == 0:
-        # فحص إزاحة أخرى مشهورة 0x30 (48)
-        offset = 48
-        old_uid_int = int.from_bytes(data[offset:offset+4], byteorder='little')
+# دالة فك تشفير Varint (كما في ملف index.html)
+def decode_varint(data, start):
+    v = 0
+    shift = 0
+    i = start
+    while True:
+        b = data[i]
+        v |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            break
+        shift += 7
+        i += 1
+    return v, i - start + 1
 
-    new_data = bytearray(data)
-    new_data[offset:offset+4] = new_uid_bytes
-    return bytes(new_data), old_uid_int
+# دالة تشفير Varint للآيدي الجديد
+def encode_varint(n):
+    out = bytearray()
+    while n > 0x7F:
+        out.append((n & 0x7F) | 0x80)
+        n >>= 7
+    out.append(n)
+    return out
+
+def process_craftland_file(data, new_uid_int):
+    # البحث عن العلامة 0x38 التي تسبق الآيدي
+    for i in range(len(data) - 5):
+        if data[i] == 0x38:
+            try:
+                # قراءة الآيدي القديم بصيغة Varint
+                old_uid, length = decode_varint(data, i + 1)
+                
+                # التأكد من أنه الآيدي الصحيح (يكون متبوعاً بـ 0x42 وآيدي كبير)
+                if data[i + 1 + length] == 0x42 and old_uid > 100000:
+                    
+                    # تشفير الآيدي الجديد
+                    new_uid_bytes = encode_varint(new_uid_int)
+                    
+                    # بناء الملف الجديد (استبدال الجزء القديم بالجديد)
+                    new_data = data[:i+1] + new_uid_bytes + data[i+1+length:]
+                    
+                    return new_data, old_uid
+            except:
+                continue
+    return data, "غير موجود"
 
 @app.route('/process_by_name', methods=['POST'])
 def handle_process():
     try:
         file = request.files.get('file')
         chat_id = request.form.get('chat_id')
-        
-        # استخراج الآيدي الجديد من اسم الملف
         new_uid = int(re.search(r'(\d+)', file.filename).group(1))
         file_content = file.read()
 
-        modified_data, old_uid = process_file_logic(file_content, new_uid)
+        modified_data, old_uid = process_craftland_file(file_content, new_uid)
 
         output = io.BytesIO(modified_data)
         output.name = "ProjectData_slot_1.bytes"
         
-        # رسالة احترافية بدون ذكر Vercel
-        caption = (f"✅ **تمت العملية بنجاح**\n\n"
+        caption = (f"✅ **تمت المعالجة بنجاح**\n\n"
                    f"🆔 المعرف القديم: `{old_uid}`\n"
                    f"🆕 المعرف الجديد: `{new_uid}`")
         
