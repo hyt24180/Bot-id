@@ -1,7 +1,9 @@
 from flask import Flask, request, send_file
+from flask_cors import CORS  # مكتبة حل مشكلة فشل الاتصال من المتصفح
 import io
 
 app = Flask(__name__)
+CORS(app) # تفعيل السماح بالاتصال من أي مصدر (حل مشكلة فشل الاتصال)
 
 # 1. دالة فك تشفير Varint لقراءة الـ UID القديم
 def decode_varint(data, start):
@@ -42,12 +44,13 @@ def find_uid(data):
 
 @app.route('/')
 def home():
-    return "API is Running! Use /process for requests."
+    return {"status": "online", "message": "API is Running! Use /process for requests."}
 
 @app.route('/process', methods=['POST'])
 def process_file():
+    # التحقق من وجود ملف في الطلب
     if 'file' not in request.files:
-        return "Missing file part", 400
+        return {"error": "Missing file part"}, 400
     
     file = request.files['file']
     uid_str = request.form.get('uid', '0')
@@ -55,11 +58,12 @@ def process_file():
     try:
         new_uid = int(uid_str)
     except ValueError:
-        return "Invalid UID format", 400
+        return {"error": "Invalid UID format"}, 400
 
     if file.filename == '':
-        return "No selected file", 400
+        return {"error": "No selected file"}, 400
 
+    # قراءة بيانات الملف ومعالجتها
     data = bytearray(file.read())
     res = find_uid(data)
 
@@ -67,7 +71,7 @@ def process_file():
         start, length = res
         new_var = encode_varint(new_uid)
         
-        # استبدال البايتات القديمة بالجديدة
+        # استبدال البايتات القديمة بالجديدة (تعديل الـ UID)
         modified_data = data[:start] + new_var + data[start + length:]
         
         output = io.BytesIO(modified_data)
@@ -80,8 +84,8 @@ def process_file():
             download_name="Craftland_Modified.bytes"
         )
     
-    return "UID pattern not found in the file", 404
+    return {"error": "UID pattern not found in the file"}, 404
 
-# هذا السطر مهم جداً لـ Vercel وللتشغيل المحلي
+# التشغيل
 if __name__ == "__main__":
     app.run(debug=True)
