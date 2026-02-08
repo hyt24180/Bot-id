@@ -5,6 +5,8 @@ import io
 app = Flask(__name__)
 CORS(app)
 
+# --- دالات المعالجة البرمجية ---
+
 def decode_varint(data, start):
     value, shift, pos = 0, 0, start
     try:
@@ -28,51 +30,67 @@ def encode_varint(num):
     return bytes(out)
 
 def find_uid(data):
+    # البحث عن النمط البرمجي للـ UID
     for i in range(len(data) - 6):
         if data[i] == 0x38:
             value, length = decode_varint(data, i + 1)
             if value is not None:
                 if i + 1 + length < len(data) and data[i + 1 + length] == 0x42:
-                    return i + 1, length, value # أضفنا القيمة هنا
+                    return i + 1, length, value
     return None
+
+# --- المسارات (Endpoints) ---
 
 @app.route('/')
 def home():
-    return {"status": "online"}
+    return {"status": "online", "service": "UID Modifier Ready"}
 
-# نقطة اتصال جديدة لمعرفة الـ UID القديم فقط قبل التعديل
 @app.route('/get_info', methods=['POST'])
 def get_info():
-    if 'file' not in request.files: return {"error": "No file"}, 400
-    data = bytearray(request.files['file'].read())
-    res = find_uid(data)
+    if 'file' not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    
+    file_data = request.files['file'].read()
+    res = find_uid(bytearray(file_data))
+    
     if res:
         return jsonify({"old_uid": str(res[2])})
-    return jsonify({"error": "UID not found"}), 404
+    return jsonify({"error": "UID pattern not found"}), 404
 
 @app.route('/process', methods=['POST'])
 def process_file():
-    if 'file' not in request.files: return {"error": "No file"}, 400
+    if 'file' not in request.files:
+        return "No file uploaded", 400
     
     file = request.files['file']
-    new_uid = int(request.form.get('uid', 0))
+    try:
+        new_uid = int(request.form.get('uid', 0))
+    except:
+        return "Invalid UID value", 400
+
     data = bytearray(file.read())
     res = find_uid(data)
 
     if res:
         start, length, _ = res
-        modified_data = data[:start] + encode_varint(new_uid) + data[start + length:]
-        output = io.BytesIO(modified_data)
+        new_varint = encode_varint(new_uid)
         
-        # هنا قمنا بتثبيت الاسم كما طلبت
+        # استبدال البيانات القديمة بالجديدة
+        modified_data = data[:start] + new_varint + data[start + length:]
+        
+        # تحويل البيانات المعدلة إلى ملف في الذاكرة
+        output = io.BytesIO(modified_data)
+        output.seek(0)
+        
+        # إرسال الملف بالاسم الثابت المطلوب
         return send_file(
             output,
             mimetype='application/octet-stream',
             as_attachment=True,
-            download_name="ProjectData_slot_1.bytes" 
+            download_name="ProjectData_slot_1.bytes"
         )
     
-    return {"error": "UID not found"}, 404
+    return "UID not found in file", 404
 
 if __name__ == "__main__":
-    app.run()
+    app.run(host='0.0.0.0', port=5000)
