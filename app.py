@@ -1,86 +1,66 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify
+import telebot
 import io
 import re
 
 app = Flask(__name__)
-# تفعيل CORS للسماح للموقع بقراءة البيانات من السيرفر
-CORS(app, expose_headers=['X-Old-UID', 'X-New-UID'])
 
-def decode_varint(data, start):
-    value, shift, pos = 0, 0, start
-    try:
-        while True:
-            b = data[pos]
-            value |= (b & 0x7F) << shift
-            if not (b & 0x80): break
-            shift += 7
-            pos += 1
-        return value, pos - start + 1
-    except: return None, 0
+# إعدادات البوت
+TOKEN = "8488650962:AAHbiv5ErWNooKDD36wAeGm0gDpRbbUHirQ"
+bot = telebot.TeleBot(TOKEN)
 
-def encode_varint(num):
-    if num == 0: return b'\x00'
-    out = []
-    while num > 0x7F:
-        out.append((num & 0x7F) | 0x80)
-        num >>= 7
-    out.append(num)
-    return bytes(out)
-
-def find_uid_data(data):
-    for i in range(len(data) - 10):
-        if data[i] == 0x38:
-            value, length = decode_varint(data, i + 1)
-            # التأكد أن الـ ID أكبر من مليون لضمان الدقة
-            if value is not None and value > 1000000:
-                return i + 1, length, value
-    return None
+def change_uid(data, new_uid_int):
+    # تحويل الآيدي الجديد إلى Bytes (Little Endian - 4 bytes)
+    new_uid_bytes = new_uid_int.to_bytes(4, byteorder='little')
+    
+    # البحث عن المعرف القديم عند الأوفست 0x38 (حسب ملفات .bytes المشهورة)
+    # إذا كان موقع الآيدي مختلفاً في ملفك، يجب تعديل الرقم 56 (0x38)
+    offset = 56 
+    old_uid_int = int.from_bytes(data[offset:offset+4], byteorder='little')
+    
+    # تبديل الآيدي
+    new_data = bytearray(data)
+    new_data[offset:offset+4] = new_uid_bytes
+    
+    return bytes(new_data), old_uid_int
 
 @app.route('/process_by_name', methods=['POST'])
-def process_by_name():
-    if 'file' not in request.files:
-        return "No file uploaded", 400
-    
-    file = request.files['file']
-    filename = file.filename
-    
-    # استخراج الـ ID الجديد من اسم الملف
-    match = re.search(r'(\d+)', filename)
-    if not match:
-        return "New ID not found in filename. Rename file to '12345.bytes'", 400
-    
-    new_uid = int(match.group(1))
-    data = bytearray(file.read())
-    res = find_uid_data(data)
+def process_file():
+    try:
+        # 1. استقبال الملف و chat_id
+        file = request.files.get('file')
+        chat_id = request.form.get('chat_id')
+        
+        if not file or not chat_id:
+            return "Missing data", 400
 
-    if res:
-        start, length, old_uid = res
-        new_v = encode_varint(new_uid)
+        # 2. قراءة اسم الملف لاستخراج الآيدي الجديد
+        file_name = file.filename
+        match = re.search(r'(\d+)', file_name)
+        if not match:
+            return "No ID in filename", 400
         
-        # استبدال المعرف القديم بالجديد
-        modified_data = data[:start] + new_v + data[start + length:]
-        
+        new_uid = int(match.group(1))
+        file_content = file.read()
+
+        # 3. معالجة الملف وتغيير الآيدي
+        modified_data, old_uid = change_uid(file_content, new_uid)
+
+        # 4. إرسال الملف المعدل مباشرة من Vercel إلى تليجرام
         output = io.BytesIO(modified_data)
-        response = send_file(
-            output,
-            mimetype='application/octet-stream',
-            as_attachment=True,
-            download_name="ProjectData_slot_1.bytes"
-        )
+        output.name = "ProjectData_slot_1.bytes"
         
-        # إضافة البيانات في الهيدرز ليقرأها الموقع
-        response.headers['X-Old-UID'] = str(old_uid)
-        response.headers['X-New-UID'] = str(new_uid)
-        # تصريح للمتصفح بقراءة هذه الهيدرز
-        response.headers['Access-Control-Expose-Headers'] = 'X-Old-UID, X-New-UID'
-        return response
-    
-    return "UID pattern (0x38) not found in file", 404
+        caption = (f"✅ **تم التعديل بواسطة Vercel**\n\n"
+                   f"🆔 المعرف القديم: `{old_uid}`\n"
+                   f"🆕 المعرف الجديد: `{new_uid}`")
+        
+        bot.send_document(chat_id, output, caption=caption, parse_mode='Markdown')
 
-@app.route('/')
-def home():
-    return "API is Online and ready for website requests."
+        return "Success", 200
 
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    except Exception as e:
+        print(f"Error: {e}")
+        return str(e), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
