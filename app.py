@@ -4,7 +4,8 @@ import io
 import re
 
 app = Flask(__name__)
-CORS(app)
+# تفعيل CORS للسماح للموقع بقراءة البيانات من السيرفر
+CORS(app, expose_headers=['X-Old-UID', 'X-New-UID'])
 
 def decode_varint(data, start):
     value, shift, pos = 0, 0, start
@@ -31,6 +32,7 @@ def find_uid_data(data):
     for i in range(len(data) - 10):
         if data[i] == 0x38:
             value, length = decode_varint(data, i + 1)
+            # التأكد أن الـ ID أكبر من مليون لضمان الدقة
             if value is not None and value > 1000000:
                 return i + 1, length, value
     return None
@@ -43,10 +45,10 @@ def process_by_name():
     file = request.files['file']
     filename = file.filename
     
-    # استخراج الـ ID الجديد من اسم الملف (مثلاً 14580239389.bytes)
+    # استخراج الـ ID الجديد من اسم الملف
     match = re.search(r'(\d+)', filename)
     if not match:
-        return "New ID not found in filename", 400
+        return "New ID not found in filename. Rename file to '12345.bytes'", 400
     
     new_uid = int(match.group(1))
     data = bytearray(file.read())
@@ -56,22 +58,29 @@ def process_by_name():
         start, length, old_uid = res
         new_v = encode_varint(new_uid)
         
-        # تعديل البيانات
+        # استبدال المعرف القديم بالجديد
         modified_data = data[:start] + new_v + data[start + length:]
         
         output = io.BytesIO(modified_data)
-        # إرسال الملف مع وضع المعرف القديم في الهيدر لكي يقرأه جوجل سكربت
         response = send_file(
             output,
             mimetype='application/octet-stream',
             as_attachment=True,
             download_name="ProjectData_slot_1.bytes"
         )
+        
+        # إضافة البيانات في الهيدرز ليقرأها الموقع
         response.headers['X-Old-UID'] = str(old_uid)
         response.headers['X-New-UID'] = str(new_uid)
+        # تصريح للمتصفح بقراءة هذه الهيدرز
+        response.headers['Access-Control-Expose-Headers'] = 'X-Old-UID, X-New-UID'
         return response
     
-    return "UID pattern not found in file", 404
+    return "UID pattern (0x38) not found in file", 404
+
+@app.route('/')
+def home():
+    return "API is Online and ready for website requests."
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
